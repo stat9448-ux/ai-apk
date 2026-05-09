@@ -1,9 +1,9 @@
 #!/bin/bash
 # ДАННЫЕ ТВОЕГО СЕРВЕРА
-TARGET_IP="193.32.189.220"
+TARGET_IP="192.168.0.207"
 MODEL_NAME="llama3"
 
-# 1. Структура
+# 1. Структура проекта
 mkdir -p app/src/main/java/com/localai/chat
 mkdir -p app/src/main/res/values
 
@@ -32,7 +32,7 @@ plugins {
 }
 EOF
 
-# 3. Модуль
+# 3. Модуль (Версия 3.4)
 cat <<'EOF' > app/build.gradle.kts
 plugins {
     id("com.android.application")
@@ -46,8 +46,8 @@ android {
         applicationId = "com.localai.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "3.3"
+        versionCode = 14
+        versionName = "3.4"
     }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.11" }
@@ -85,7 +85,7 @@ cat <<'EOF' > app/src/main/AndroidManifest.xml
 </manifest>
 EOF
 
-# 5. КОД ПРИЛОЖЕНИЯ (С ПРЯМЫМИ ПУТЯМИ ДЛЯ KSP)
+# 5. КОД ПРИЛОЖЕНИЯ
 cat <<'EOF' > app/src/main/java/com/localai/chat/MainActivity.kt
 package com.localai.chat
 
@@ -110,10 +110,8 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.*
 
-// Константы
 const val ADDR = "REPLACE_IP"
 const val MOD = "REPLACE_MODEL"
-// Модели БД
 @androidx.room.Entity(tableName = "chat_table")
 data class ChatEntry(
     @androidx.room.PrimaryKey(autoGenerate = true) val id: Int = 0,
@@ -131,12 +129,11 @@ interface ChatDao {
     suspend fun clearAll()
 }
 
-@androidx.room.Database(entities = [ChatEntry::class], version = 6, exportSchema = false)
+@androidx.room.Database(entities = [ChatEntry::class], version = 7, exportSchema = false)
 abstract class AppDb : androidx.room.RoomDatabase() {
     abstract fun chatDao(): ChatDao
 }
 
-// API
 data class OllamaReq(val model: String, val prompt: String, val stream: Boolean = false)
 data class OllamaRes(val response: String)
 interface OllamaService { @POST("api/generate") suspend fun generate(@Body r: OllamaReq): OllamaRes }
@@ -147,7 +144,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         val database = androidx.room.Room.databaseBuilder(
-            applicationContext, AppDb::class.java, "ollama_v6_db"
+            applicationContext, AppDb::class.java, "ollama_v7_db"
         ).fallbackToDestructiveMigration().build()
         
         val retrofit = Retrofit.Builder()
@@ -175,7 +172,7 @@ class MainActivity : ComponentActivity() {
                             actions = {
                                 TextButton(onClick = { scope.launch { database.chatDao().clearAll() } }) {
                                     Icon(Icons.Default.Refresh, null, tint = Color.Cyan)
-                                    Text(" Очистить", color = Color.Cyan)
+                                    Text(" Новый чат", color = Color.Cyan)
                                 }
                             }
                         )
