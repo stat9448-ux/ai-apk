@@ -1,14 +1,29 @@
 #!/bin/bash
-# Создаем все нужные папки сразу
+# 1. Создаем структуру папок
 mkdir -p app/src/main/java/com/localai/chat
 mkdir -p app/src/main/res/values
 
-# Создаем настройки проекта
+# 2. Создаем настройки проекта (исправлено: добавили поиск плагинов в Google)
 cat <<'EOF' > settings.gradle.kts
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
 rootProject.name = "Local AI Chat"
 include(":app")
 EOF
 
+# 3. Корневой build.gradle (упростили до минимума)
 cat <<'EOF' > build.gradle.kts
 plugins {
     id("com.android.application") version "8.2.2" apply false
@@ -16,6 +31,7 @@ plugins {
 }
 EOF
 
+# 4. Модуль приложения
 cat <<'EOF' > app/build.gradle.kts
 plugins {
     id("com.android.application")
@@ -34,6 +50,7 @@ android {
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.1" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = "17" }
 }
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
@@ -44,6 +61,7 @@ dependencies {
 }
 EOF
 
+# 5. Манифест
 cat <<'EOF' > app/src/main/AndroidManifest.xml
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
@@ -58,6 +76,7 @@ cat <<'EOF' > app/src/main/AndroidManifest.xml
 </manifest>
 EOF
 
+# 6. Код приложения
 cat <<'EOF' > app/src/main/java/com/localai/chat/MainActivity.kt
 package com.localai.chat
 import android.os.Bundle
@@ -69,7 +88,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            Text("Приложение собрано! Подключай Ollama.")
+            Text("Сборка прошла успешно!")
         }
     }
 }
