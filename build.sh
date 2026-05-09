@@ -3,7 +3,7 @@
 TARGET_IP="193.32.189.220"
 MODEL_NAME="llama3"
 
-# 1. Структура проекта
+# 1. Структура
 mkdir -p app/src/main/java/com/localai/chat
 mkdir -p app/src/main/res/values
 
@@ -15,9 +15,7 @@ android.enableJetifier=true
 EOF
 
 cat <<'EOF' > settings.gradle.kts
-pluginManagement {
-    repositories { google(); mavenCentral(); gradlePluginPortal() }
-}
+pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories { google(); mavenCentral() }
@@ -34,7 +32,7 @@ plugins {
 }
 EOF
 
-# 3. Настройка модуля (Исправлены зависимости для Room)
+# 3. Модуль (Упрощенные зависимости для стабильности)
 cat <<'EOF' > app/build.gradle.kts
 plugins {
     id("com.android.application")
@@ -48,8 +46,8 @@ android {
         applicationId = "com.localai.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "3.1"
+        versionCode = 12
+        versionName = "3.2"
     }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.11" }
@@ -64,7 +62,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     
-    // Room - исправленные зависимости
+    // Room - Самая стабильная связка
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
@@ -78,7 +76,7 @@ EOF
 cat <<'EOF' > app/src/main/AndroidManifest.xml
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:label="Ollama AI" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <application android:label="Ollama Mobile" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
@@ -86,7 +84,7 @@ cat <<'EOF' > app/src/main/AndroidManifest.xml
 </manifest>
 EOF
 
-# 5. КОД ПРИЛОЖЕНИЯ (Полностью переписан во избежание ошибок KSP)
+# 5. КОД ПРИЛОЖЕНИЯ
 cat <<'EOF' > app/src/main/java/com/localai/chat/MainActivity.kt
 package com.localai.chat
 
@@ -113,54 +111,49 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.*
 
 const val ADDR = "REPLACE_IP"
-const val MODEL = "REPLACE_MODEL"
-@Entity(tableName = "chat_log")
-data class ChatMsg(
+const val MOD = "REPLACE_MODEL"
+@Entity(tableName = "chat")
+data class Message(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    @ColumnInfo(name = "is_user") val isUser: Boolean,
-    @ColumnInfo(name = "msg_text") val text: String
+    @ColumnInfo(name = "u") val isU: Boolean,
+    @ColumnInfo(name = "t") val txt: String
 )
 
 @Dao
 interface ChatDao {
-    @Query("SELECT * FROM chat_log ORDER BY id ASC")
-    fun getAll(): Flow<List<ChatMsg>>
+    @Query("SELECT * FROM chat ORDER BY id ASC")
+    fun get(): Flow<List<Message>>
     @Insert
-    suspend fun insert(m: ChatMsg)
-    @Query("DELETE FROM chat_log")
-    suspend fun clear()
+    suspend fun add(m: Message)
+    @Query("DELETE FROM chat")
+    suspend fun del()
 }
 
-@Database(entities = [ChatMsg::class], version = 4, exportSchema = false)
-abstract class ChatDb : RoomDatabase() {
-    abstract fun dao(): ChatDao
-}
+@Database(entities = [Message::class], version = 5, exportSchema = false)
+abstract class ChatDatabase : RoomDatabase() { abstract fun dao(): ChatDao }
 
-data class AiReq(val model: String, val prompt: String, val stream: Boolean = false)
-data class AiRes(val response: String)
-interface AiApi { 
-    @POST("api/generate") 
-    suspend fun ask(@Body r: AiReq): AiRes 
-}
+data class Req(val model: String, val prompt: String, val stream: Boolean = false)
+data class Res(val response: String)
+interface Api { @POST("api/generate") suspend fun ask(@Body r: Req): Res }
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        val db = Room.databaseBuilder(applicationContext, ChatDb::class.java, "ai_database_v4")
+        val db = Room.databaseBuilder(applicationContext, ChatDatabase::class.java, "ai_db_v5")
             .fallbackToDestructiveMigration().build()
         
         val api = Retrofit.Builder()
             .baseUrl("http://$ADDR:11434/")
             .addConverterFactory(GsonConverterFactory.create())
-            .build().create(AiApi::class.java)
+            .build().create(Api::class.java)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                val msgs by db.dao().getAll().collectAsState(initial = emptyList())
+                val msgs by db.dao().get().collectAsState(initial = emptyList())
                 var input by remember { mutableStateOf("") }
-                var busy by remember { mutableStateOf(false) }
+                var loading by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
                 val listState = rememberLazyListState()
 
@@ -174,7 +167,7 @@ class MainActivity : ComponentActivity() {
                                 Text(ADDR, style = MaterialTheme.typography.labelSmall, color = Color.Cyan)
                             }},
                             actions = {
-                                TextButton(onClick = { scope.launch { db.dao().clear() } }) {
+                                TextButton(onClick = { scope.launch { db.dao().del() } }) {
                                     Icon(Icons.Default.Add, null, tint = Color.Cyan)
                                     Text(" Новый чат", color = Color.Cyan)
                                 }
@@ -185,34 +178,33 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.padding(p).fillMaxSize().background(Color(0xFF101010))) {
                         LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
                             items(msgs) { m ->
-                                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), 
-                                    contentAlignment = if(m.isUser) Alignment.CenterEnd else Alignment.CenterStart) {
-                                    Text(m.text, Modifier.clip(RoundedCornerShape(12.dp))
-                                        .background(if(m.isUser) Color(0xFF006064) else Color(0xFF212121)).padding(12.dp), color = Color.White)
+                                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = if(m.isU) Alignment.CenterEnd else Alignment.CenterStart) {
+                                    Text(m.txt, Modifier.clip(RoundedCornerShape(12.dp))
+                                        .background(if(m.isU) Color(0xFF006064) else Color(0xFF212121)).padding(12.dp), color = Color.White)
                                 }
                             }
                         }
-                        if(busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.Cyan)
+                        if(loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.Cyan)
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             TextField(
                                 value = input, onValueChange = {input = it}, 
-                                modifier = Modifier.weight(1f),
-shape = RoundedCornerShape(24.dp),
-                                colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent)
+                                modifier = Modifier.weight(1f), 
+                                shape = RoundedCornerShape(24.dp),
+colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent)
                             )
                             Spacer(Modifier.width(8.dp))
                             FloatingActionButton(
                                 onClick = {
-                                    if(input.isBlank() || busy) return@FloatingActionButton
-                                    val t = input; input = ""; busy = true
+                                    if(input.isBlank() || loading) return@FloatingActionButton
+                                    val t = input; input = ""; loading = true
                                     scope.launch {
-                                        db.dao().insert(ChatMsg(isUser = true, text = t))
+                                        db.dao().add(Message(isU = true, txt = t))
                                         try {
-                                            val r = api.ask(AiReq(MODEL, t))
-                                            db.dao().insert(ChatMsg(isUser = false, text = r.response))
+                                            val r = api.ask(Req(MOD, t))
+                                            db.dao().add(Message(isU = false, txt = r.response))
                                         } catch(e: Exception) {
-                                            db.dao().insert(ChatMsg(isUser = false, text = "Ошибка: ${e.localizedMessage}"))
-                                        } finally { busy = false }
+                                            db.dao().add(Message(isU = false, txt = "Ошибка: ${e.localizedMessage}"))
+                                        } finally { loading = false }
                                     }
                                 },
                                 containerColor = Color(0xFF00BCD4)
@@ -226,6 +218,6 @@ shape = RoundedCornerShape(24.dp),
 }
 EOF
 
-# Подстановка значений
+# Подстановка
 sed -i "s/REPLACE_IP/$TARGET_IP/" app/src/main/java/com/localai/chat/MainActivity.kt
 sed -i "s/REPLACE_MODEL/$MODEL_NAME/" app/src/main/java/com/localai/chat/MainActivity.kt
