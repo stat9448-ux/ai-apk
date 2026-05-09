@@ -3,38 +3,29 @@
 TARGET_IP="193.32.189.220"
 MODEL_NAME="llama3"
 
-# 1. Подготовка папок
+# 1. Структура проекта
 mkdir -p app/src/main/java/com/localai/chat
 mkdir -p app/src/main/res/values
 
-# 2. Системные настройки Gradle
+# 2. Настройки Gradle
 cat <<'EOF' > gradle.properties
 org.gradle.jvmargs=-Xmx3g
 android.useAndroidX=true
 android.enableJetifier=true
 EOF
 
-# 3. Настройка репозиториев
 cat <<'EOF' > settings.gradle.kts
 pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
-    repositories {
-        google()
-        mavenCentral()
-    }
+    repositories { google(); mavenCentral() }
 }
 rootProject.name = "MyOllamaChat"
 include(":app")
 EOF
 
-# 4. Плагины
 cat <<'EOF' > build.gradle.kts
 plugins {
     id("com.android.application") version "8.3.2" apply false
@@ -43,7 +34,7 @@ plugins {
 }
 EOF
 
-# 5. Зависимости (Room + Retrofit)
+# 3. Настройка модуля (Исправлены зависимости для Room)
 cat <<'EOF' > app/build.gradle.kts
 plugins {
     id("com.android.application")
@@ -57,8 +48,8 @@ android {
         applicationId = "com.localai.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 10
-        versionName = "3.0"
+        versionCode = 11
+        versionName = "3.1"
     }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.11" }
@@ -72,19 +63,22 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    
+    // Room - исправленные зависимости
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
+    
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
 }
 EOF
 
-# 6. Манифест
+# 4. Манифест
 cat <<'EOF' > app/src/main/AndroidManifest.xml
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:label="AI Chat Private" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <application android:label="Ollama AI" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
@@ -92,7 +86,7 @@ cat <<'EOF' > app/src/main/AndroidManifest.xml
 </manifest>
 EOF
 
-# 7. КОД ПРИЛОЖЕНИЯ (С ПАМЯТЬЮ И НОВЫМ ЧАТОМ)
+# 5. КОД ПРИЛОЖЕНИЯ (Полностью переписан во избежание ошибок KSP)
 cat <<'EOF' > app/src/main/java/com/localai/chat/MainActivity.kt
 package com.localai.chat
 
@@ -118,29 +112,35 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.*
 
-const val SERVER_IP = "REPLACE_IP"
-const val SERVER_MODEL = "REPLACE_MODEL"
-@Entity(tableName = "chat_history")
-data class Message(@PrimaryKey(autoGenerate = true) val id: Int = 0, val isUser: Boolean, val text: String)
+const val ADDR = "REPLACE_IP"
+const val MODEL = "REPLACE_MODEL"
+@Entity(tableName = "chat_log")
+data class ChatMsg(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    @ColumnInfo(name = "is_user") val isUser: Boolean,
+    @ColumnInfo(name = "msg_text") val text: String
+)
 
 @Dao
 interface ChatDao {
-    @Query("SELECT * FROM chat_history ORDER BY id ASC")
-    fun loadHistory(): Flow<List<Message>>
+    @Query("SELECT * FROM chat_log ORDER BY id ASC")
+    fun getAll(): Flow<List<ChatMsg>>
     @Insert
-    suspend fun saveMessage(msg: Message)
-    @Query("DELETE FROM chat_history")
-    suspend fun deleteHistory()
+    suspend fun insert(m: ChatMsg)
+    @Query("DELETE FROM chat_log")
+    suspend fun clear()
 }
 
-@Database(entities = [Message::class], version = 2, exportSchema = false)
-abstract class AppDatabase : RoomDatabase() { abstract fun dao(): ChatDao }
+@Database(entities = [ChatMsg::class], version = 4, exportSchema = false)
+abstract class ChatDb : RoomDatabase() {
+    abstract fun dao(): ChatDao
+}
 
-data class OllamaReq(val model: String, val prompt: String, val stream: Boolean = false)
-data class OllamaRes(val response: String)
-interface OllamaApi { 
+data class AiReq(val model: String, val prompt: String, val stream: Boolean = false)
+data class AiRes(val response: String)
+interface AiApi { 
     @POST("api/generate") 
-    suspend fun generate(@Body req: OllamaReq): OllamaRes 
+    suspend fun ask(@Body r: AiReq): AiRes 
 }
 
 class MainActivity : ComponentActivity() {
@@ -148,75 +148,74 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Создаем БД с миграцией, чтобы память не стиралась при обновах
-        val db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "ollama_chat_v3")
+        val db = Room.databaseBuilder(applicationContext, ChatDb::class.java, "ai_database_v4")
             .fallbackToDestructiveMigration().build()
         
         val api = Retrofit.Builder()
-            .baseUrl("http://$SERVER_IP:11434/")
+            .baseUrl("http://$ADDR:11434/")
             .addConverterFactory(GsonConverterFactory.create())
-            .build().create(OllamaApi::class.java)
+            .build().create(AiApi::class.java)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                val history by db.dao().loadHistory().collectAsState(initial = emptyList())
+                val msgs by db.dao().getAll().collectAsState(initial = emptyList())
                 var input by remember { mutableStateOf("") }
-                var loading by remember { mutableStateOf(false) }
+                var busy by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
                 val listState = rememberLazyListState()
 
-                LaunchedEffect(history.size) { if(history.isNotEmpty()) listState.animateScrollToItem(history.size - 1) }
+                LaunchedEffect(msgs.size) { if(msgs.isNotEmpty()) listState.animateScrollToItem(msgs.size - 1) }
 
                 Scaffold(
                     topBar = {
                         TopAppBar(
-                            title = { Text("AI: $SERVER_MODEL", style = MaterialTheme.typography.titleMedium) },
+                            title = { Column {
+                                Text("Ollama Remote", style = MaterialTheme.typography.titleMedium)
+                                Text(ADDR, style = MaterialTheme.typography.labelSmall, color = Color.Cyan)
+                            }},
                             actions = {
-                                // КНОПКА "НОВЫЙ ЧАТ"
-                                TextButton(onClick = { scope.launch { db.dao().deleteHistory() } }) {
-                                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.Cyan)
+                                TextButton(onClick = { scope.launch { db.dao().clear() } }) {
+                                    Icon(Icons.Default.Add, null, tint = Color.Cyan)
                                     Text(" Новый чат", color = Color.Cyan)
                                 }
                             }
                         )
                     }
                 ) { p ->
-                    Column(Modifier.padding(p).fillMaxSize().background(Color(0xFF0F0F0F))) {
+                    Column(Modifier.padding(p).fillMaxSize().background(Color(0xFF101010))) {
                         LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            items(history) { m ->
-                                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = if(m.isUser) Alignment.CenterEnd else Alignment.CenterStart) {
-                                    Text(m.text, Modifier.clip(RoundedCornerShape(16.dp))
-                                        .background(if(m.isUser) Color(0xFF005A5F) else Color(0xFF262626)).padding(14.dp), color = Color.White)
+                            items(msgs) { m ->
+                                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), 
+                                    contentAlignment = if(m.isUser) Alignment.CenterEnd else Alignment.CenterStart) {
+                                    Text(m.text, Modifier.clip(RoundedCornerShape(12.dp))
+                                        .background(if(m.isUser) Color(0xFF006064) else Color(0xFF212121)).padding(12.dp), color = Color.White)
                                 }
                             }
                         }
-                        
-                        if(loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.Cyan)
-
+                        if(busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.Cyan)
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             TextField(
                                 value = input, onValueChange = {input = it}, 
                                 modifier = Modifier.weight(1f),
-placeholder = { Text("Написать...") },
-                                shape = RoundedCornerShape(24.dp),
+shape = RoundedCornerShape(24.dp),
                                 colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent)
                             )
                             Spacer(Modifier.width(8.dp))
                             FloatingActionButton(
                                 onClick = {
-                                    if(input.isBlank() || loading) return@FloatingActionButton
-                                    val userMsg = input; input = ""; loading = true
+                                    if(input.isBlank() || busy) return@FloatingActionButton
+                                    val t = input; input = ""; busy = true
                                     scope.launch {
-                                        db.dao().saveMessage(Message(isUser = true, text = userMsg))
+                                        db.dao().insert(ChatMsg(isUser = true, text = t))
                                         try {
-                                            val res = api.generate(OllamaReq(model = SERVER_MODEL, prompt = userMsg))
-                                            db.dao().saveMessage(Message(isUser = false, text = res.response))
+                                            val r = api.ask(AiReq(MODEL, t))
+                                            db.dao().insert(ChatMsg(isUser = false, text = r.response))
                                         } catch(e: Exception) {
-                                            db.dao().saveMessage(Message(isUser = false, text = "Ошибка связи: ${e.message}"))
-                                        } finally { loading = false }
+                                            db.dao().insert(ChatMsg(isUser = false, text = "Ошибка: ${e.localizedMessage}"))
+                                        } finally { busy = false }
                                     }
                                 },
-                                containerColor = Color(0xFF00ADB5)
+                                containerColor = Color(0xFF00BCD4)
                             ) { Icon(Icons.Default.Send, null, tint = Color.White) }
                         }
                     }
@@ -227,6 +226,6 @@ placeholder = { Text("Написать...") },
 }
 EOF
 
-# ФИНАЛЬНАЯ ПОДСТАНОВКА
+# Подстановка значений
 sed -i "s/REPLACE_IP/$TARGET_IP/" app/src/main/java/com/localai/chat/MainActivity.kt
 sed -i "s/REPLACE_MODEL/$MODEL_NAME/" app/src/main/java/com/localai/chat/MainActivity.kt
