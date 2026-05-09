@@ -94,7 +94,52 @@ cat <<'EOF' > app/src/main/AndroidManifest.xml
 </manifest>
 EOF
 
-# 5. КОД ПРИЛОЖЕНИЯ
+# 5. КОД ПРИЛОЖЕНИЯ: Данные и API
+cat <<'EOF' > app/src/main/java/com/localai/chat/Data.kt
+package com.localai.chat
+
+import androidx.room.*
+import kotlinx.coroutines.flow.Flow
+import retrofit2.http.Body
+import retrofit2.http.POST
+
+// --- ROOM DATA LAYER ---
+@Entity(tableName = "messages")
+data class ChatMsg(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val role: String,
+    val content: String
+)
+
+@Dao
+interface ChatDao {
+    @Query("SELECT * FROM messages ORDER BY id ASC")
+    fun getAll(): Flow<List<ChatMsg>>
+    
+    @Insert
+    suspend fun insert(msg: ChatMsg)
+    
+    @Query("DELETE FROM messages")
+    suspend fun clear()
+}
+
+@Database(entities = [ChatMsg::class], version = 51, exportSchema = false)
+abstract class AppDb : RoomDatabase() {
+    abstract fun dao(): ChatDao
+}
+
+// --- API LAYER ---
+data class OllamaMsg(val role: String, val content: String)
+data class OllamaReq(val model: String, val messages: List<OllamaMsg>, val stream: Boolean = false)
+data class OllamaRes(val message: OllamaMsg)
+
+interface OllamaApi {
+    @POST("api/chat")
+    suspend fun chat(@Body req: OllamaReq): OllamaRes
+}
+EOF
+
+# 6. КОД ПРИЛОЖЕНИЯ: UI
 cat <<'EOF' > app/src/main/java/com/localai/chat/MainActivity.kt
 package com.localai.chat
 
@@ -116,46 +161,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.room.*
-import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.http.*
 
-// --- ROOM DATA LAYER ---
-@Entity(tableName = "messages")
-data class ChatMsg(
-    @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    val role: String,
-    val content: String
-)
-
-@Dao
-interface ChatDao {
-    @Query("SELECT * FROM messages ORDER BY id ASC")
-    fun getAll(): Flow<List<ChatMsg>>
-    @Insert
-    suspend fun insert(msg: ChatMsg)
-    @Query("DELETE FROM messages")
-    suspend fun clear()
-}
-
-@Database(entities = [ChatMsg::class], version = 51, exportSchema = false)
-abstract class AppDb : RoomDatabase() {
-    abstract fun dao(): ChatDao
-}
-
-// --- API LAYER ---
-data class OllamaMsg(val role: String, val content: String)
-data class OllamaReq(val model: String, val messages: List<OllamaMsg>, val stream: Boolean = false)
-data class OllamaRes(val message: OllamaMsg)
-
-interface OllamaApi {
-    @POST("api/chat")
-    suspend fun chat(@Body req: OllamaReq): OllamaRes
-}
-
-// --- UI LAYER ---
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -172,7 +181,7 @@ class MainActivity : ComponentActivity() {
                 var model by remember { mutableStateOf(prefs.getString("model", "qwen2.5:3b") ?: "qwen2.5:3b") }
                 var showSet by remember { mutableStateOf(false) }
                 
-                val msgs by db.dao().getAll().collectAsState(initial = emptyList())
+                val msgs by db.dao().getAll().collectAsState(initial = emptyList<ChatMsg>())
                 var input by remember { mutableStateOf("") }
                 var loading by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
@@ -252,7 +261,7 @@ class MainActivity : ComponentActivity() {
                                         db.dao().insert(ChatMsg(role = "user", content = t))
                                         try {
                                             val hist = msgs.map { OllamaMsg(it.role, it.content) } + OllamaMsg("user", t)
-                                            val res = api.chat(OllamaReq(model, hist))
+                                            val res = api!!.chat(OllamaReq(model, hist))
                                             db.dao().insert(ChatMsg(role = "assistant", content = res.message.content))
                                         } catch(e: Exception) {
                                             db.dao().insert(ChatMsg(role = "assistant", content = "Error: ${e.localizedMessage}"))
