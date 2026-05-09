@@ -2,43 +2,30 @@
 # 1. Создаем структуру папок
 mkdir -p app/src/main/java/com/localai/chat
 mkdir -p app/src/main/res/values
+mkdir -p app/src/main/res/layout
 
-# 2. ВАЖНО: Создаем файл свойств (исправляет 90% ошибок сборки)
+# 2. Файл свойств (важен для стабильности)
 cat <<'EOF' > gradle.properties
 android.useAndroidX=true
 android.enableJetifier=true
 kotlin.code.style=official
 EOF
 
-# 3. Настройки проекта
+# 3. Упрощенный settings.gradle.kts (без блокировки)
 cat <<'EOF' > settings.gradle.kts
-pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
 rootProject.name = "Local AI Chat"
 include(":app")
 EOF
 
-# 4. Корневой build.gradle
+# 4. Корневой build.gradle.kts
 cat <<'EOF' > build.gradle.kts
 plugins {
-    id("com.android.application") version "8.2.2" apply false
+    id("com.android.application") version "8.4.0" apply false
     id("org.jetbrains.kotlin.android") version "1.9.22" apply false
 }
 EOF
 
-# 5. Модуль приложения
+# 5. Модуль приложения (репозитории теперь внутри, так надежнее для Gradle 9)
 cat <<'EOF' > app/build.gradle.kts
 plugins {
     id("com.android.application")
@@ -64,6 +51,11 @@ android {
     kotlinOptions { jvmTarget = "17" }
 }
 
+repositories {
+    google()
+    mavenCentral()
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.activity:activity-compose:1.8.2")
@@ -73,17 +65,30 @@ dependencies {
 }
 EOF
 
-# 6. Манифест (максимально простой)
+# 6. Базовые ресурсы (чтобы сборщик ресурсов не падал)
+cat <<'EOF' > app/src/main/res/values/strings.xml
+<resources>
+    <string name="app_name">Local AI Chat</string>
+</resources>
+EOF
+
+cat <<'EOF' > app/src/main/res/values/themes.xml
+<resources>
+    <style name="Theme.LocalAIChat" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
+EOF
+
+# 7. Манифест
 cat <<'EOF' > app/src/main/AndroidManifest.xml
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="Local AI Chat"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.LocalAIChat"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
-            android:exported="true"
-            android:theme="@android:style/Theme.NoDisplay">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -93,7 +98,7 @@ cat <<'EOF' > app/src/main/AndroidManifest.xml
 </manifest>
 EOF
 
-# 7. MainActivity (без лишних импортов)
+# 8. MainActivity
 cat <<'EOF' > app/src/main/java/com/localai/chat/MainActivity.kt
 package com.localai.chat
 
@@ -106,7 +111,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            Text("APK собрался!")
+            Text("Победа! Приложение запустилось.")
         }
     }
 }
