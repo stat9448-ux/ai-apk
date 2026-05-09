@@ -1,4 +1,4 @@
-[2026-05-09 5:31 PM] Данчик КВН: #!/bin/bash
+ #!/bin/bash
 # 1. Структура проекта
 mkdir -p app/src/main/java/com/localai/chat
 mkdir -p app/src/main/res/values
