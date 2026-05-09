@@ -28,7 +28,7 @@ plugins {
 }
 EOF
 
-# 3. Модуль (Версия 4.0 - Полная динамика)
+# 3. Модуль
 cat <<'EOF' > app/build.gradle.kts
 plugins {
     id("com.android.application")
@@ -42,8 +42,8 @@ android {
         applicationId = "com.localai.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 20
-        versionName = "4.0"
+        versionCode = 21
+        versionName = "4.1"
     }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.11" }
@@ -77,7 +77,7 @@ cat <<'EOF' > app/src/main/AndroidManifest.xml
 </manifest>
 EOF
 
-# 5. КОД ПРИЛОЖЕНИЯ (С МЕНЯЕМЫМ IP И ПОРТОМ)
+# 5. КОД ПРИЛОЖЕНИЯ
 cat <<'EOF' > app/src/main/java/com/localai/chat/MainActivity.kt
 package com.localai.chat
 
@@ -86,6 +86,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -104,7 +105,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.*
 
-// БД
+// Сущности БД
 @Entity(tableName = "messages")
 data class Msg(@PrimaryKey(autoGenerate = true) val id: Int = 0, val isUser: Boolean, val text: String)
 @Dao
@@ -115,10 +116,10 @@ interface ChatDao {
     @Query("DELETE FROM messages") suspend fun clear()
 }
 
-@Database(entities = [Msg::class], version = 10, exportSchema = false)
+@Database(entities = [Msg::class], version = 11, exportSchema = false)
 abstract class AppDb : RoomDatabase() { abstract fun dao(): ChatDao }
 
-// API
+// Сеть
 data class Req(val model: String, val prompt: String, val stream: Boolean = false)
 data class Res(val response: String)
 interface OllamaApi { @POST("api/generate") suspend fun ask(@Body r: Req): Res }
@@ -128,16 +129,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        val db = Room.databaseBuilder(applicationContext, AppDb::class.java, "ollama_final_db")
+        val db = Room.databaseBuilder(applicationContext, AppDb::class.java, "ollama_v11_db")
             .fallbackToDestructiveMigration().build()
         
         val prefs = getSharedPreferences("config", Context.MODE_PRIVATE)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                // Состояния для настроек
-                var serverIp by remember { mutableStateOf(prefs.getString("ip", "192.168.0.207") ?: "") }
-                var serverPort by remember { mutableStateOf(prefs.getString("port", "11434") ?: "") }
+                var serverIp by remember { mutableStateOf(prefs.getString("ip", "192.168.0.207") ?: "192.168.0.207") }
+                var serverPort by remember { mutableStateOf(prefs.getString("port", "11434") ?: "11434") }
                 var showSettings by remember { mutableStateOf(false) }
                 
                 val msgs by db.dao().getAll().collectAsState(initial = emptyList())
@@ -146,7 +146,6 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
                 val listState = rememberLazyListState()
 
-                // Динамическое создание API при изменении IP/Порта
                 val api = remember(serverIp, serverPort) {
                     try {
                         Retrofit.Builder()
@@ -164,7 +163,7 @@ class MainActivity : ComponentActivity() {
                             title = { 
                                 Column(Modifier.clickable { showSettings = !showSettings }) {
                                     Text("Ollama Connect", style = MaterialTheme.typography.titleMedium)
-                                    Text("$serverIp:$serverPort (нажми для смены)", style = MaterialTheme.typography.labelSmall, color = Color.Cyan)
+                                    Text("$serverIp:$serverPort (нажми для настроек)", style = MaterialTheme.typography.labelSmall, color = Color.Cyan)
                                 }
                             },
                             actions = {
@@ -177,20 +176,19 @@ class MainActivity : ComponentActivity() {
                 ) { p ->
                     Column(Modifier.padding(p).fillMaxSize().background(Color(0xFF121212))) {
                         
-                        // ПАНЕЛЬ НАСТРОЕК
                         if (showSettings) {
                             Card(Modifier.padding(8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
                                 Column(Modifier.padding(12.dp)) {
                                     OutlinedTextField(
                                         value = serverIp, onValueChange = { serverIp = it; prefs.edit().putString("ip", it).apply() },
-label = { Text("Server IP") }, modifier = Modifier.fillMaxWidth()
-                                    )
+                                        label = { Text("IP адрес сервера") }, modifier = Modifier.fillMaxWidth()
+)
                                     OutlinedTextField(
                                         value = serverPort, onValueChange = { serverPort = it; prefs.edit().putString("port", it).apply() },
-                                        label = { Text("Port") }, modifier = Modifier.fillMaxWidth()
+                                        label = { Text("Порт") }, modifier = Modifier.fillMaxWidth()
                                     )
                                     Button(onClick = { showSettings = false }, Modifier.padding(top = 8.dp).align(Alignment.End)) {
-                                        Text("Готово")
+                                        Text("Сохранить")
                                     }
                                 }
                             }
@@ -213,7 +211,7 @@ label = { Text("Server IP") }, modifier = Modifier.fillMaxWidth()
                                 value = inputTxt, onValueChange = {inputTxt = it}, 
                                 modifier = Modifier.weight(1f), 
                                 shape = RoundedCornerShape(24.dp),
-                                placeholder = { Text("Спросить AI...") },
+                                placeholder = { Text("Задать вопрос...") },
                                 colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent)
                             )
                             Spacer(Modifier.width(8.dp))
@@ -227,7 +225,7 @@ label = { Text("Server IP") }, modifier = Modifier.fillMaxWidth()
                                             val r = api.ask(Req("llama3", t))
                                             db.dao().insert(Msg(isUser = false, text = r.response))
                                         } catch(e: Exception) {
-                                            db.dao().insert(Msg(isUser = false, text = "Ошибка подключения к $serverIp:$serverPort\n${e.localizedMessage}"))
+                                            db.dao().insert(Msg(isUser = false, text = "Ошибка связи: ${e.localizedMessage}"))
                                         } finally { loading = false }
                                     }
                                 },
@@ -240,5 +238,4 @@ label = { Text("Server IP") }, modifier = Modifier.fillMaxWidth()
         }
     }
 }
-import androidx.compose.foundation.clickable
 EOF
