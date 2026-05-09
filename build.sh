@@ -1,9 +1,20 @@
-#!/bin/bash
+[2026-05-09 5:31 PM] Данчик КВН: #!/bin/bash
 # 1. Структура проекта
 mkdir -p app/src/main/java/com/localai/chat
 mkdir -p app/src/main/res/values
+mkdir -p gradle/wrapper
 
 # 2. Gradle Настройки
+cat <<'EOF' > gradle/wrapper/gradle-wrapper.properties
+distributionBase=PROJECT
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=PROJECT
+zipStorePath=wrapper/dists
+EOF
+
 cat <<'EOF' > gradle.properties
 org.gradle.jvmargs=-Xmx2g
 android.useAndroidX=true
@@ -115,6 +126,7 @@ data class ChatMsg(
     val role: String,
     val content: String
 )
+
 @Dao
 interface ChatDao {
     @Query("SELECT * FROM messages ORDER BY id ASC")
@@ -178,14 +190,17 @@ class MainActivity : ComponentActivity() {
                     topBar = {
                         TopAppBar(
                             title = { 
-                                Column(Modifier.clickable { showSet = !showSet }) {
+                                Column {
                                     Text("Ollama v5.1", style = MaterialTheme.typography.titleMedium)
-                                    Text("$model @ $ip", style = MaterialTheme.typography.labelSmall, color = Color.Cyan)
+                                    Text("$model @ $ip:$port", style = MaterialTheme.typography.labelSmall, color = Color.Cyan)
                                 }
                             },
                             actions = {
+                                IconButton(onClick = { showSet = !showSet }) {
+                                    Icon(Icons.Default.Settings, contentDescription = "Settings", tint = if (showSet) Color.Cyan else Color.Gray)
+                                }
                                 IconButton(onClick = { scope.launch { db.dao().clear() } }) {
-                                    Icon(Icons.Default.DeleteSweep, null, tint = Color.Gray)
+                                    Icon(Icons.Default.DeleteSweep, contentDescription = "Clear Chat", tint = Color.Gray)
                                 }
                             }
                         )
@@ -195,10 +210,12 @@ class MainActivity : ComponentActivity() {
                         if (showSet) {
                             Card(Modifier.padding(8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
                                 Column(Modifier.padding(12.dp)) {
-                                    OutlinedTextField(value = ip, onValueChange = { ip = it; prefs.edit().putString("ip", it).apply() }, label = { Text("IP") }, modifier = Modifier.fillMaxWidth())
-OutlinedTextField(value = port, onValueChange = { port = it; prefs.edit().putString("port", it).apply() }, label = { Text("Port") }, modifier = Modifier.fillMaxWidth())
-                                    OutlinedTextField(value = model, onValueChange = { model = it; prefs.edit().putString("model", it).apply() }, label = { Text("Model Name") }, modifier = Modifier.fillMaxWidth())
-                                    Button(onClick = { showSet = false }, Modifier.align(Alignment.End).padding(top = 8.dp)) { Text("Save") }
+                                    Text("Настройки подключения", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                                    Spacer(Modifier.height(8.dp))
+                                    OutlinedTextField(value = ip, onValueChange = { ip = it; prefs.edit().putString("ip", it).apply() }, label = { Text("IP адрес") }, modifier = Modifier.fillMaxWidth())
+                                    OutlinedTextField(value = port, onValueChange = { port = it; prefs.edit().putString("port", it).apply() }, label = { Text("Порт") }, modifier = Modifier.fillMaxWidth())
+                                    OutlinedTextField(value = model, onValueChange = { model = it; prefs.edit().putString("model", it).apply() }, label = { Text("Модель") }, modifier = Modifier.fillMaxWidth())
+                                    Button(onClick = { showSet = false }, Modifier.align(Alignment.End).padding(top = 8.dp)) { Text("Сохранить") }
                                 }
                             }
                         }
@@ -226,7 +243,7 @@ OutlinedTextField(value = port, onValueChange = { port = it; prefs.edit().putStr
                             Spacer(Modifier.width(8.dp))
                             FloatingActionButton(
                                 onClick = {
-                                    if(input.isBlank()  loading  api == null) return@FloatingActionButton
+                                    if(input.isBlank() || loading || api == null) return@FloatingActionButton
                                     val t = input; input = ""; loading = true
                                     scope.launch {
                                         db.dao().insert(ChatMsg(role = "user", content = t))
