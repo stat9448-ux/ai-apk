@@ -32,7 +32,7 @@ plugins {
 }
 EOF
 
-# 3. Модуль (Упрощенные зависимости для стабильности)
+# 3. Модуль
 cat <<'EOF' > app/build.gradle.kts
 plugins {
     id("com.android.application")
@@ -46,8 +46,8 @@ android {
         applicationId = "com.localai.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 12
-        versionName = "3.2"
+        versionCode = 13
+        versionName = "3.3"
     }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.11" }
@@ -62,10 +62,11 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     
-    // Room - Самая стабильная связка
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    ksp("androidx.room:room-compiler:2.6.1")
+    // Room
+    val room_version = "2.6.1"
+    implementation("androidx.room:room-runtime:$room_version")
+    implementation("androidx.room:room-ktx:$room_version")
+    ksp("androidx.room:room-compiler:$room_version")
     
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
@@ -76,7 +77,7 @@ EOF
 cat <<'EOF' > app/src/main/AndroidManifest.xml
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:label="Ollama Mobile" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <application android:label="Ollama AI" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
@@ -84,7 +85,7 @@ cat <<'EOF' > app/src/main/AndroidManifest.xml
 </manifest>
 EOF
 
-# 5. КОД ПРИЛОЖЕНИЯ
+# 5. КОД ПРИЛОЖЕНИЯ (С ПРЯМЫМИ ПУТЯМИ ДЛЯ KSP)
 cat <<'EOF' > app/src/main/java/com/localai/chat/MainActivity.kt
 package com.localai.chat
 
@@ -103,111 +104,117 @@ import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.room.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.*
 
+// Константы
 const val ADDR = "REPLACE_IP"
 const val MOD = "REPLACE_MODEL"
-@Entity(tableName = "chat")
-data class Message(
-    @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    @ColumnInfo(name = "u") val isU: Boolean,
-    @ColumnInfo(name = "t") val txt: String
+// Модели БД
+@androidx.room.Entity(tableName = "chat_table")
+data class ChatEntry(
+    @androidx.room.PrimaryKey(autoGenerate = true) val id: Int = 0,
+    @androidx.room.ColumnInfo(name = "user_side") val isUser: Boolean,
+    @androidx.room.ColumnInfo(name = "content") val text: String
 )
 
-@Dao
+@androidx.room.Dao
 interface ChatDao {
-    @Query("SELECT * FROM chat ORDER BY id ASC")
-    fun get(): Flow<List<Message>>
-    @Insert
-    suspend fun add(m: Message)
-    @Query("DELETE FROM chat")
-    suspend fun del()
+    @androidx.room.Query("SELECT * FROM chat_table ORDER BY id ASC")
+    fun observeAll(): Flow<List<ChatEntry>>
+    @androidx.room.Insert
+    suspend fun addMessage(entry: ChatEntry)
+    @androidx.room.Query("DELETE FROM chat_table")
+    suspend fun clearAll()
 }
 
-@Database(entities = [Message::class], version = 5, exportSchema = false)
-abstract class ChatDatabase : RoomDatabase() { abstract fun dao(): ChatDao }
+@androidx.room.Database(entities = [ChatEntry::class], version = 6, exportSchema = false)
+abstract class AppDb : androidx.room.RoomDatabase() {
+    abstract fun chatDao(): ChatDao
+}
 
-data class Req(val model: String, val prompt: String, val stream: Boolean = false)
-data class Res(val response: String)
-interface Api { @POST("api/generate") suspend fun ask(@Body r: Req): Res }
+// API
+data class OllamaReq(val model: String, val prompt: String, val stream: Boolean = false)
+data class OllamaRes(val response: String)
+interface OllamaService { @POST("api/generate") suspend fun generate(@Body r: OllamaReq): OllamaRes }
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        val db = Room.databaseBuilder(applicationContext, ChatDatabase::class.java, "ai_db_v5")
-            .fallbackToDestructiveMigration().build()
+        val database = androidx.room.Room.databaseBuilder(
+            applicationContext, AppDb::class.java, "ollama_v6_db"
+        ).fallbackToDestructiveMigration().build()
         
-        val api = Retrofit.Builder()
+        val retrofit = Retrofit.Builder()
             .baseUrl("http://$ADDR:11434/")
             .addConverterFactory(GsonConverterFactory.create())
-            .build().create(Api::class.java)
+            .build().create(OllamaService::class.java)
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
-                val msgs by db.dao().get().collectAsState(initial = emptyList())
-                var input by remember { mutableStateOf("") }
-                var loading by remember { mutableStateOf(false) }
+                val chatData by database.chatDao().observeAll().collectAsState(initial = emptyList())
+                var inputTxt by remember { mutableStateOf("") }
+                var isWait by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
-                val listState = rememberLazyListState()
+                val scroll = rememberLazyListState()
 
-                LaunchedEffect(msgs.size) { if(msgs.isNotEmpty()) listState.animateScrollToItem(msgs.size - 1) }
+                LaunchedEffect(chatData.size) { if(chatData.isNotEmpty()) scroll.animateScrollToItem(chatData.size - 1) }
 
                 Scaffold(
                     topBar = {
                         TopAppBar(
                             title = { Column {
-                                Text("Ollama Remote", style = MaterialTheme.typography.titleMedium)
+                                Text("Ollama Chat", style = MaterialTheme.typography.titleMedium)
                                 Text(ADDR, style = MaterialTheme.typography.labelSmall, color = Color.Cyan)
                             }},
                             actions = {
-                                TextButton(onClick = { scope.launch { db.dao().del() } }) {
-                                    Icon(Icons.Default.Add, null, tint = Color.Cyan)
-                                    Text(" Новый чат", color = Color.Cyan)
+                                TextButton(onClick = { scope.launch { database.chatDao().clearAll() } }) {
+                                    Icon(Icons.Default.Refresh, null, tint = Color.Cyan)
+                                    Text(" Очистить", color = Color.Cyan)
                                 }
                             }
                         )
                     }
                 ) { p ->
-                    Column(Modifier.padding(p).fillMaxSize().background(Color(0xFF101010))) {
-                        LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            items(msgs) { m ->
-                                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = if(m.isU) Alignment.CenterEnd else Alignment.CenterStart) {
-                                    Text(m.txt, Modifier.clip(RoundedCornerShape(12.dp))
-                                        .background(if(m.isU) Color(0xFF006064) else Color(0xFF212121)).padding(12.dp), color = Color.White)
+                    Column(Modifier.padding(p).fillMaxSize().background(Color(0xFF121212))) {
+                        LazyColumn(state = scroll, modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            items(chatData) { m ->
+                                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), 
+                                    contentAlignment = if(m.isUser) Alignment.CenterEnd else Alignment.CenterStart) {
+                                    Text(m.text, Modifier.clip(RoundedCornerShape(12.dp))
+                                        .background(if(m.isUser) Color(0xFF004D40) else Color(0xFF2C2C2C)).padding(12.dp), color = Color.White)
                                 }
                             }
                         }
-                        if(loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.Cyan)
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if(isWait) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.Cyan)
+Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             TextField(
-                                value = input, onValueChange = {input = it}, 
+                                value = inputTxt, onValueChange = {inputTxt = it}, 
                                 modifier = Modifier.weight(1f), 
                                 shape = RoundedCornerShape(24.dp),
-colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent)
+                                colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent)
                             )
                             Spacer(Modifier.width(8.dp))
                             FloatingActionButton(
                                 onClick = {
-                                    if(input.isBlank() || loading) return@FloatingActionButton
-                                    val t = input; input = ""; loading = true
+                                    if(inputTxt.isBlank() || isWait) return@FloatingActionButton
+                                    val t = inputTxt; inputTxt = ""; isWait = true
                                     scope.launch {
-                                        db.dao().add(Message(isU = true, txt = t))
+                                        database.chatDao().addMessage(ChatEntry(isUser = true, text = t))
                                         try {
-                                            val r = api.ask(Req(MOD, t))
-                                            db.dao().add(Message(isU = false, txt = r.response))
+                                            val r = retrofit.generate(OllamaReq(MOD, t))
+                                            database.chatDao().addMessage(ChatEntry(isUser = false, text = r.response))
                                         } catch(e: Exception) {
-                                            db.dao().add(Message(isU = false, txt = "Ошибка: ${e.localizedMessage}"))
-                                        } finally { loading = false }
+                                            database.chatDao().addMessage(ChatEntry(isUser = false, text = "Error: ${e.message}"))
+                                        } finally { isWait = false }
                                     }
                                 },
-                                containerColor = Color(0xFF00BCD4)
+                                containerColor = Color(0xFF009688)
                             ) { Icon(Icons.Default.Send, null, tint = Color.White) }
                         }
                     }
