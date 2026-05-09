@@ -39,7 +39,7 @@ plugins {
 }
 EOF
 
-# 3. Модуль (v5.1)
+# 3. Модуль (v6.1 - с увеличенными таймаутами)
 cat <<'EOF' > app/build.gradle.kts
 plugins {
     id("com.android.application")
@@ -53,8 +53,8 @@ android {
         applicationId = "com.localai.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 31
-        versionName = "5.1"
+        versionCode = 33
+        versionName = "6.1"
     }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.11" }
@@ -76,6 +76,9 @@ dependencies {
     
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    // Добавляем OkHttp для управления таймаутами
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
@@ -103,24 +106,18 @@ import kotlinx.coroutines.flow.Flow
 import retrofit2.http.Body
 import retrofit2.http.POST
 
-// --- ROOM DATA LAYER ---
 @Entity(tableName = "messages")
 data class ChatMsg(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val role: String,
     val content: String
 )
-
 @Dao
 interface ChatDao {
     @Query("SELECT * FROM messages ORDER BY id ASC")
     fun getAll(): Flow<List<ChatMsg>>
-    
-    @Insert
-    suspend fun insert(msg: ChatMsg)
-    
-    @Query("DELETE FROM messages")
-    suspend fun clear()
+    @Insert suspend fun insert(msg: ChatMsg)
+    @Query("DELETE FROM messages") suspend fun clear()
 }
 
 @Database(entities = [ChatMsg::class], version = 51, exportSchema = false)
@@ -128,7 +125,6 @@ abstract class AppDb : RoomDatabase() {
     abstract fun dao(): ChatDao
 }
 
-// --- API LAYER ---
 data class OllamaMsg(val role: String, val content: String)
 data class OllamaReq(val model: String, val messages: List<OllamaMsg>, val stream: Boolean = false)
 data class OllamaRes(val message: OllamaMsg)
@@ -139,7 +135,7 @@ interface OllamaApi {
 }
 EOF
 
-# 6. КОД ПРИЛОЖЕНИЯ: UI
+# 6. КОД ПРИЛОЖЕНИЯ: UI с исправленными таймаутами
 cat <<'EOF' > app/src/main/java/com/localai/chat/MainActivity.kt
 package com.localai.chat
 
@@ -162,8 +158,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.room.*
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
@@ -187,23 +185,32 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
                 val listState = rememberLazyListState()
 
-                val api = remember(ip, port) {
+                // Настраиваем клиент с большими таймаутами
+                val okHttpClient = remember {
+                    OkHttpClient.Builder()
+                        .connectTimeout(60, TimeUnit.SECONDS) // Время на подключение
+                        .readTimeout(300, TimeUnit.SECONDS)    // Время ожидания ответа (5 минут)
+                        .writeTimeout(60, TimeUnit.SECONDS)   // Время на отправку запроса
+                        .build()
+                }
+
+                val api = remember(ip, port, okHttpClient) {
                     try {
                         Retrofit.Builder()
                             .baseUrl("http://$ip:$port/")
+                            .client(okHttpClient) // Передаем настроенный клиент в Retrofit
                             .addConverterFactory(GsonConverterFactory.create())
                             .build().create(OllamaApi::class.java)
                     } catch (e: Exception) { null }
                 }
 
                 LaunchedEffect(msgs.size) { if(msgs.isNotEmpty()) listState.animateScrollToItem(msgs.size - 1) }
-
-                Scaffold(
+Scaffold(
                     topBar = {
                         TopAppBar(
                             title = { 
                                 Column {
-                                    Text("Ollama v5.1", style = MaterialTheme.typography.titleMedium)
+                                    Text("Ollama v6.1", style = MaterialTheme.typography.titleMedium)
                                     Text("$model @ $ip:$port", style = MaterialTheme.typography.labelSmall, color = Color.Cyan)
                                 }
                             },
@@ -249,19 +256,19 @@ class MainActivity : ComponentActivity() {
                                 value = input, onValueChange = {input = it}, 
                                 modifier = Modifier.weight(1f), 
                                 shape = RoundedCornerShape(24.dp),
-                                placeholder = { Text("Ask Ollama...") },
+                                placeholder = { Text("Спросить Ollama...") },
                                 colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent)
-                            )
+)
                             Spacer(Modifier.width(8.dp))
                             FloatingActionButton(
                                 onClick = {
-                                    if(input.isBlank() || loading || api == null) return@FloatingActionButton
+                                    if(input.isBlank()  loading  api == null) return@FloatingActionButton
                                     val t = input; input = ""; loading = true
                                     scope.launch {
                                         db.dao().insert(ChatMsg(role = "user", content = t))
                                         try {
                                             val hist = msgs.map { OllamaMsg(it.role, it.content) } + OllamaMsg("user", t)
-                                            val res = api!!.chat(OllamaReq(model, hist))
+                                            val res = api.chat(OllamaReq(model, hist))
                                             db.dao().insert(ChatMsg(role = "assistant", content = res.message.content))
                                         } catch(e: Exception) {
                                             db.dao().insert(ChatMsg(role = "assistant", content = "Error: ${e.localizedMessage}"))
