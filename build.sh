@@ -42,8 +42,8 @@ android {
         applicationId = "com.localai.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 21
-        versionName = "4.1"
+        versionCode = 22
+        versionName = "4.2"
     }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.11" }
@@ -57,9 +57,13 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    ksp("androidx.room:room-compiler:2.6.1")
+    
+    // Room
+    val room_version = "2.6.1"
+    implementation("androidx.room:room-runtime:$room_version")
+    implementation("androidx.room:room-ktx:$room_version")
+    ksp("androidx.room:room-compiler:$room_version")
+    
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
 }
@@ -104,32 +108,47 @@ import kotlinx.coroutines.launch
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.*
+// 1. Сначала определяем сущность
+@Entity(tableName = "chat_messages")
+data class ChatMessage(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    @ColumnInfo(name = "is_user") val isUser: Boolean,
+    @ColumnInfo(name = "text_content") val text: String
+)
 
-// Сущности БД
-@Entity(tableName = "messages")
-data class Msg(@PrimaryKey(autoGenerate = true) val id: Int = 0, val isUser: Boolean, val text: String)
+// 2. Затем DAO (используя полный путь к ChatMessage для KSP)
 @Dao
 interface ChatDao {
-    @Query("SELECT * FROM messages ORDER BY id ASC")
-    fun getAll(): Flow<List<Msg>>
-    @Insert suspend fun insert(m: Msg)
-    @Query("DELETE FROM messages") suspend fun clear()
+    @Query("SELECT * FROM chat_messages ORDER BY id ASC")
+    fun getAllMessages(): Flow<List<ChatMessage>>
+    
+    @Insert
+    suspend fun insertMessage(msg: ChatMessage)
+    
+    @Query("DELETE FROM chat_messages")
+    suspend fun deleteAll()
 }
 
-@Database(entities = [Msg::class], version = 11, exportSchema = false)
-abstract class AppDb : RoomDatabase() { abstract fun dao(): ChatDao }
+// 3. Затем БД
+@Database(entities = [ChatMessage::class], version = 12, exportSchema = false)
+abstract class AppDb : RoomDatabase() {
+    abstract fun dao(): ChatDao
+}
 
-// Сеть
-data class Req(val model: String, val prompt: String, val stream: Boolean = false)
-data class Res(val response: String)
-interface OllamaApi { @POST("api/generate") suspend fun ask(@Body r: Req): Res }
+// API структуры
+data class OllamaRequest(val model: String, val prompt: String, val stream: Boolean = false)
+data class OllamaResponse(val response: String)
+interface OllamaApi { 
+    @POST("api/generate") 
+    suspend fun ask(@Body request: OllamaRequest): OllamaResponse 
+}
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        val db = Room.databaseBuilder(applicationContext, AppDb::class.java, "ollama_v11_db")
+        val db = Room.databaseBuilder(applicationContext, AppDb::class.java, "ollama_final_v12")
             .fallbackToDestructiveMigration().build()
         
         val prefs = getSharedPreferences("config", Context.MODE_PRIVATE)
@@ -140,9 +159,9 @@ class MainActivity : ComponentActivity() {
                 var serverPort by remember { mutableStateOf(prefs.getString("port", "11434") ?: "11434") }
                 var showSettings by remember { mutableStateOf(false) }
                 
-                val msgs by db.dao().getAll().collectAsState(initial = emptyList())
-                var inputTxt by remember { mutableStateOf("") }
-                var loading by remember { mutableStateOf(false) }
+                val messages by db.dao().getAllMessages().collectAsState(initial = emptyList())
+                var inputText by remember { mutableStateOf("") }
+                var isLoading by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
                 val listState = rememberLazyListState()
 
@@ -155,47 +174,47 @@ class MainActivity : ComponentActivity() {
                     } catch (e: Exception) { null }
                 }
 
-                LaunchedEffect(msgs.size) { if(msgs.isNotEmpty()) listState.animateScrollToItem(msgs.size - 1) }
+                LaunchedEffect(messages.size) { if(messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1) }
 
                 Scaffold(
                     topBar = {
                         TopAppBar(
                             title = { 
                                 Column(Modifier.clickable { showSettings = !showSettings }) {
-                                    Text("Ollama Connect", style = MaterialTheme.typography.titleMedium)
-                                    Text("$serverIp:$serverPort (нажми для настроек)", style = MaterialTheme.typography.labelSmall, color = Color.Cyan)
+                                    Text("Ollama Master", style = MaterialTheme.typography.titleMedium)
+                                    Text("$serverIp:$serverPort", style = MaterialTheme.typography.labelSmall, color = Color.Cyan)
                                 }
                             },
                             actions = {
-                                IconButton(onClick = { scope.launch { db.dao().clear() } }) {
+                                IconButton(onClick = { scope.launch { db.dao().deleteAll() } }) {
                                     Icon(Icons.Default.DeleteSweep, null, tint = Color.Gray)
                                 }
                             }
                         )
                     }
-                ) { p ->
-                    Column(Modifier.padding(p).fillMaxSize().background(Color(0xFF121212))) {
+                ) { padding ->
+                    Column(Modifier.padding(padding).fillMaxSize().background(Color(0xFF121212))) {
                         
                         if (showSettings) {
-                            Card(Modifier.padding(8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
+Card(Modifier.padding(8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
                                 Column(Modifier.padding(12.dp)) {
                                     OutlinedTextField(
                                         value = serverIp, onValueChange = { serverIp = it; prefs.edit().putString("ip", it).apply() },
-                                        label = { Text("IP адрес сервера") }, modifier = Modifier.fillMaxWidth()
-)
+                                        label = { Text("IP адрес") }, modifier = Modifier.fillMaxWidth()
+                                    )
                                     OutlinedTextField(
                                         value = serverPort, onValueChange = { serverPort = it; prefs.edit().putString("port", it).apply() },
                                         label = { Text("Порт") }, modifier = Modifier.fillMaxWidth()
                                     )
-                                    Button(onClick = { showSettings = false }, Modifier.padding(top = 8.dp).align(Alignment.End)) {
-                                        Text("Сохранить")
+                                    Button(onClick = { showSettings = false }, Modifier.align(Alignment.End).padding(top = 8.dp)) {
+                                        Text("Готово")
                                     }
                                 }
                             }
                         }
 
                         LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            items(msgs) { m ->
+                            items(messages) { m ->
                                 Box(Modifier.fillMaxWidth().padding(vertical = 4.dp), 
                                     contentAlignment = if(m.isUser) Alignment.CenterEnd else Alignment.CenterStart) {
                                     Text(m.text, Modifier.clip(RoundedCornerShape(12.dp))
@@ -204,11 +223,11 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        if(loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.Cyan)
+                        if(isLoading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.Cyan)
 
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             TextField(
-                                value = inputTxt, onValueChange = {inputTxt = it}, 
+                                value = inputText, onValueChange = {inputText = it}, 
                                 modifier = Modifier.weight(1f), 
                                 shape = RoundedCornerShape(24.dp),
                                 placeholder = { Text("Задать вопрос...") },
@@ -217,16 +236,16 @@ class MainActivity : ComponentActivity() {
                             Spacer(Modifier.width(8.dp))
                             FloatingActionButton(
                                 onClick = {
-                                    if(inputTxt.isBlank()  loading  api == null) return@FloatingActionButton
-                                    val t = inputTxt; inputTxt = ""; loading = true
+                                    if(inputText.isBlank()  isLoading  api == null) return@FloatingActionButton
+                                    val text = inputText; inputText = ""; isLoading = true
                                     scope.launch {
-                                        db.dao().insert(Msg(isUser = true, text = t))
+                                        db.dao().insertMessage(ChatMessage(isUser = true, text = text))
                                         try {
-                                            val r = api.ask(Req("llama3", t))
-                                            db.dao().insert(Msg(isUser = false, text = r.response))
+                                            val response = api.ask(OllamaRequest("llama3", text))
+                                            db.dao().insertMessage(ChatMessage(isUser = false, text = response.response))
                                         } catch(e: Exception) {
-                                            db.dao().insert(Msg(isUser = false, text = "Ошибка связи: ${e.localizedMessage}"))
-                                        } finally { loading = false }
+                                            db.dao().insertMessage(ChatMessage(isUser = false, text = "Ошибка: ${e.localizedMessage}"))
+                                        } finally { isLoading = false }
                                     }
                                 },
                                 containerColor = Color(0xFF00BCD4)
