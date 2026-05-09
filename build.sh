@@ -1,5 +1,5 @@
 #!/bin/bash
-# ДАННЫЕ ТВОЕГО СЕРВЕРА (УЖЕ ВШИТЫ)
+# ДАННЫЕ ТВОЕГО СЕРВЕРА
 TARGET_IP="193.32.189.220"
 MODEL_NAME="llama3"
 
@@ -14,10 +14,21 @@ android.useAndroidX=true
 android.enableJetifier=true
 EOF
 
+# ИСПРАВЛЕННЫЙ settings.gradle.kts (добавили поиск плагинов)
 cat <<'EOF' > settings.gradle.kts
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
-    repositories { google(); mavenCentral() }
+    repositories {
+        google()
+        mavenCentral()
+    }
 }
 rootProject.name = "MyOllamaChat"
 include(":app")
@@ -44,8 +55,8 @@ android {
         applicationId = "com.localai.chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "2.5"
+        versionCode = 6
+        versionName = "2.6"
     }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.11" }
@@ -68,13 +79,13 @@ dependencies {
 EOF
 
 cat <<'EOF' > app/src/main/res/values/strings.xml
-<resources><string name="app_name">My AI Server</string></resources>
+<resources><string name="app_name">Ollama Admin</string></resources>
 EOF
 
 cat <<'EOF' > app/src/main/AndroidManifest.xml
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <application android:label="My AI Server" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+    <application android:label="Ollama Admin" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
@@ -82,7 +93,6 @@ cat <<'EOF' > app/src/main/AndroidManifest.xml
 </manifest>
 EOF
 
-# Код приложения (UI + Retrofit)
 cat <<EOF > app/src/main/java/com/localai/chat/MainActivity.kt
 package com.localai.chat
 
@@ -123,7 +133,7 @@ interface Api { @POST("/api/generate") suspend fun ask(@Body r: Req): Res }
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val db = Room.databaseBuilder(this, DB::class.java, "ai_final.db").build()
+        val db = Room.databaseBuilder(this, DB::class.java, "ai_final_v2.db").build()
         val api = Retrofit.Builder()
             .baseUrl("http://$TARGET_IP:11434")
             .addConverterFactory(GsonConverterFactory.create())
@@ -142,47 +152,50 @@ class MainActivity : ComponentActivity() {
                 Scaffold(
                     topBar = {
                         CenterAlignedTopAppBar(
-                            title = { Text("Ollama Server • $TARGET_IP", style = MaterialTheme.typography.labelMedium) },
+                            title = { Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("AI Server Console", style = MaterialTheme.typography.titleMedium)
+                                Text("$TARGET_IP", style = MaterialTheme.typography.labelSmall, color = Color.LightGray)
+                            }},
                             actions = { IconButton(onClick = { scope.launch { db.dao().clear() } }) { Icon(Icons.Default.DeleteSweep, null) } }
                         )
                     }
                 ) { p ->
-                    Column(Modifier.padding(p).fillMaxSize().background(Color(0xFF121212))) {
+                    Column(Modifier.padding(p).fillMaxSize().background(Color(0xFF1A1A1A))) {
                         LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
                             items(msgs) { m ->
                                 Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = if(m.isU) Alignment.CenterEnd else Alignment.CenterStart) {
                                     Text(m.t, Modifier.clip(RoundedCornerShape(16.dp))
-                                        .background(if(m.isU) Color(0xFF373737) else Color(0xFF252525)).padding(14.dp), color = Color.White)
+                                        .background(if(m.isU) Color(0xFF4A4A4A) else Color(0xFF2D2D2D)).padding(14.dp), color = Color.White)
                                 }
                             }
                         }
-                        if(loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.Gray)
+                        if(loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.Cyan)
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             TextField(
                                 value = txt, onValueChange = {txt = it}, 
                                 modifier = Modifier.weight(1f), 
-                                placeholder = { Text("Спросить ИИ...") },
+                                placeholder = { Text("Введите запрос...") },
                                 shape = RoundedCornerShape(28.dp),
                                 colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent)
                             )
                             Spacer(Modifier.width(8.dp))
                             FloatingActionButton(
                                 onClick = {
-                                    if(txt.isBlank() || loading) return@FloatingActionButton
-                                    val userText = txt; txt = ""; loading = true
+if(txt.isBlank() || loading) return@FloatingActionButton
+                                    val uT = txt; txt = ""; loading = true
                                     scope.launch {
-db.dao().add(Msg(isU = true, t = userText))
+                                        db.dao().add(Msg(isU = true, t = uT))
                                         try {
-                                            val res = api.ask(Req(prompt = userText))
+                                            val res = api.ask(Req(prompt = uT))
                                             db.dao().add(Msg(isU = false, t = res.response))
                                         } catch(e: Exception) {
-                                            db.dao().add(Msg(isU = false, t = "Ошибка: \${e.localizedMessage}"))
+                                            db.dao().add(Msg(isU = false, t = "Ошибка сети: \${e.localizedMessage}"))
                                         } finally { loading = false }
                                     }
                                 },
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                containerColor = Color(0xFF00ADB5),
                                 shape = RoundedCornerShape(50)
-                            ) { Icon(Icons.Default.Send, null) }
+                            ) { Icon(Icons.Default.Send, null, tint = Color.White) }
                         }
                     }
                 }
